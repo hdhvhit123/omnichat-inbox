@@ -59,9 +59,13 @@ export class StorageService {
     await fs.rm(this.localPath(key), { force: true });
   }
 
-  /** URL tải có thời hạn. S3: presigned URL; local: URL ký HMAC qua API. */
+  /**
+   * URL tải có thời hạn. Mặc định: URL ký HMAC qua API (dùng được cả khi kho S3 chỉ truy cập nội bộ,
+   * và để nền tảng tải tệp đính kèm qua tên miền HTTPS công khai). Đặt S3_PRESIGNED_DOWNLOADS=true
+   * nếu kho S3 có endpoint công khai và muốn tải trực tiếp.
+   */
   async signedUrl(key: string, filename: string, ttlSec = 600): Promise<string> {
-    if (config().STORAGE_DRIVER === 's3') {
+    if (config().STORAGE_DRIVER === 's3' && config().S3_PRESIGNED_DOWNLOADS) {
       return getSignedUrl(
         this.client(),
         new GetObjectCommand({ Bucket: config().S3_BUCKET, Key: key, ResponseContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(filename)}` }),

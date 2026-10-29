@@ -8,3 +8,4 @@ coverage
 storage
 *.log
 apps/web/next-env.d.ts
+e2e/screenshots

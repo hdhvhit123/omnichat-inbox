@@ -1,4 +1,4 @@
-import { checkGrounding } from '../src/ai/ai.service';
+import { checkGrounding, redactContact } from '../src/ai/ai.service';
 import { chunkText } from '../src/ai/knowledge.service';
 import { containsKeyword, normalizeVi, normalizeVnPhone } from '../src/common/text';
 import { isOutsideBusinessHours, ruleMatches } from '../src/rules/rule-engine';
@@ -53,5 +53,9 @@ describe('Hàm thuần', () => {
     expect(parseZalo({ event_name: 'user_send_text', timestamp: '1', sender: { id: 'u' }, recipient: { id: 'oa' }, message: { msg_id: 'm', text: 't' } })[0]).toMatchObject({ type: 'message', direction: 'inbound', userExternalId: 'u' });
     expect(parseZalo({ event_name: 'oa_send_text', timestamp: '1', sender: { id: 'oa' }, recipient: { id: 'u' }, message: { msg_id: 'm2', text: 't' } })[0]).toMatchObject({ direction: 'echo', userExternalId: 'u' });
     expect(parseZalo({ event_name: 'user_seen_message', timestamp: '1', sender: { id: 'oa' }, recipient: { id: 'u' }, message: { msg_ids: ['m2'] } })[0]).toMatchObject({ type: 'read', mids: ['m2'] });
+  });
+  it('che SĐT và email trước khi gửi sang nhà cung cấp AI', () => {
+    expect(redactContact('Gọi em 0912 345 678 hoặc +84 912345678, mail a.b@shop.vn nhé')).toBe('Gọi em [sđt] hoặc [sđt], mail [email] nhé');
+    expect(redactContact('Áo size 42 giá 250.000đ')).toBe('Áo size 42 giá 250.000đ');
   });
 });

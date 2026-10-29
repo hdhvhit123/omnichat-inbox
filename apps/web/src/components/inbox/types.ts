@@ -1,0 +1,48 @@
+export type Tag = { id: string; name: string; color?: string | null };
+export type ConvItem = {
+  id: string;
+  status: string;
+  assigneeId: string | null;
+  botMode: string | null;
+  botPaused: boolean;
+  lastMessageAt: string | null;
+  lastInboundAt: string | null;
+  lastMessagePreview: string | null;
+  unreadCount: number;
+  handoffAt: string | null;
+  customer: { id: string; displayName: string; avatarUrl?: string | null; phone?: string | null };
+  channel: { id: string; type: string; name: string; isSimulated: boolean };
+  tags: Tag[];
+};
+export type Message = {
+  id: string;
+  conversationId: string;
+  direction: 'INBOUND' | 'OUTBOUND';
+  senderType: 'CUSTOMER' | 'AGENT' | 'BOT' | 'RULE' | 'SYSTEM';
+  authorId: string | null;
+  text: string | null;
+  attachments: { type: string; url?: string; name?: string; fileId?: string; mime?: string; size?: number }[] | null;
+  status: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  sentAt: string;
+  deliveredAt: string | null;
+  readAt: string | null;
+  sentOutsideSystem: boolean;
+  clientMsgId: string | null;
+};
+export type Note = { id: string; authorId: string; body: string; createdAt: string };
+export type TimelineItem = { kind: 'message'; at: string; message: Message } | { kind: 'note'; at: string; note: Note };
+export type Member = { id: string; role: string; user: { id: string; name: string; email: string }; channelIds: string[] };
+export type AiTask = {
+  id: string;
+  status: string;
+  mode: string;
+  draftText: string | null;
+  sources: { id: string; title: string; version: number; excerpt: string }[] | null;
+  decision: string | null;
+  reason: string | null;
+  costUsd: number;
+  createdAt: string;
+  triggerMessageId: string;
+};

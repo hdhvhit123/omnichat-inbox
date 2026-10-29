@@ -148,10 +148,10 @@ export class AiService {
     });
     const user = [
       '<history>',
-      ...history.reverse().map((m) => `${m.senderType === 'CUSTOMER' ? 'Khách' : 'Cửa hàng'}: ${escapeTags(m.text ?? '')}`),
+      ...history.reverse().map((m) => `${m.senderType === 'CUSTOMER' ? 'Khách' : 'Cửa hàng'}: ${escapeTags(redactContact(m.text ?? ''))}`),
       '</history>',
       ...sources.map((s) => `<source id="${s.id}" title="${escapeTags(s.title)}">\n${escapeTags(s.content)}\n</source>`),
-      `<customer_message>\n${escapeTags(text)}\n</customer_message>`,
+      `<customer_message>\n${escapeTags(redactContact(text))}\n</customer_message>`,
     ].join('\n');
 
     let decision: AiDecision;
@@ -225,6 +225,13 @@ export class AiService {
   private emitDraft(conversation: { id: string; workspaceId: string; channelId: string; assigneeId: string | null }, task: AiTask) {
     this.realtime.emit(this.realtime.conversationRooms(conversation), 'ai.task', { conversationId: conversation.id, taskId: task.id, status: task.status });
   }
+}
+
+/** Che số điện thoại và email trước khi gửi sang nhà cung cấp AI (không cần cho việc trả lời). */
+export function redactContact(s: string) {
+  return s
+    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[email]')
+    .replace(/(?:\+?84|0)(?:[\s.-]?\d){8,10}/g, '[sđt]');
 }
 
 function escapeTags(s: string) {

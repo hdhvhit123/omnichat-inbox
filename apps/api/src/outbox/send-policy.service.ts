@@ -105,6 +105,18 @@ export class SendPolicyService {
     if (inWindow(cs)) return { allowed: true, sendParams: { zaloType: 'cs' }, policy: pick(cs) };
     return deny('WINDOW_EXPIRED', `Đã quá ${cs.windowHours} giờ kể từ tương tác gần nhất của khách nên không thể gửi tin tư vấn Zalo. Hệ thống không tự chuyển sang loại tin khác. Bản nháp được giữ lại.`);
   }
+
+  /** Tóm tắt cửa sổ gửi cho giao diện (chỉ hiển thị; quyết định gửi luôn qua check()). */
+  async windowInfo(workspace: Workspace, channelType: ChannelType, lastInboundAt: Date | null, now = new Date()) {
+    if (!lastInboundAt) return { open: false, expiresAt: null, category: null, agentExpiresAt: null };
+    const rules = await this.activeRules(workspace.id, channelType, now);
+    const main = rules.find((r) => r.category === (channelType === 'FACEBOOK' ? 'RESPONSE' : 'CS'));
+    const human = channelType === 'FACEBOOK' && workspace.fbHumanAgentTagEnabled ? rules.find((r) => r.category === 'HUMAN_AGENT') : undefined;
+    const exp = (r?: PolicyRule) => (r ? new Date(lastInboundAt.getTime() + r.windowHours * 3600_000) : null);
+    const expiresAt = exp(main);
+    const agentExpiresAt = exp(human) ?? expiresAt;
+    return { open: !!expiresAt && expiresAt > now, expiresAt, category: main?.category ?? null, agentExpiresAt };
+  }
 }
 
 function pick(r: PolicyRule) {

@@ -45,6 +45,7 @@ const schema = z.object({
   S3_ACCESS_KEY: z.string().optional(),
   S3_SECRET_KEY: z.string().optional(),
   S3_FORCE_PATH_STYLE: bool,
+  S3_PRESIGNED_DOWNLOADS: bool,
   MAX_UPLOAD_MB: z.coerce.number().default(25),
 
   PLATFORM_HTTP_TIMEOUT_MS: z.coerce.number().default(15000),

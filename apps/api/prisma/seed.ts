@@ -147,22 +147,35 @@ async function seedDemo(owner: { id: string }, extra: { manager: string; agent: 
 
 async function main() {
   await seedPolicies();
+  const demo = process.env.SEED_DEMO !== 'false';
+  const ownerEmail = process.env.SEED_OWNER_EMAIL;
+  const ownerPassword = process.env.SEED_OWNER_PASSWORD;
+  if (!demo && (!ownerEmail || !ownerPassword || ownerPassword.length < 10)) {
+    throw new Error('Khi SEED_DEMO=false cần SEED_OWNER_EMAIL và SEED_OWNER_PASSWORD (tối thiểu 10 ký tự).');
+  }
   const pw = process.env.SEED_DEMO_PASSWORD ?? 'Demo@12345';
-  const owner = await user(process.env.SEED_OWNER_EMAIL ?? 'owner@demo.local', 'Chủ cửa hàng', pw);
-  const manager = await user('manager@demo.local', 'Quản lý Lan', pw);
-  const agent = await user('agent@demo.local', 'Nhân viên Minh', pw);
-  const viewer = await user('viewer@demo.local', 'Người xem Hùng', pw);
+  const owner = await user(ownerEmail ?? 'owner@demo.local', process.env.SEED_OWNER_NAME ?? 'Chủ cửa hàng', ownerPassword ?? pw);
 
-  if (process.env.SEED_DEMO !== 'false') await seedDemo(owner, { manager: manager.id, agent: agent.id, viewer: viewer.id });
+  if (demo) {
+    // Tài khoản demo chỉ tạo khi bật dữ liệu mô phỏng
+    const manager = await user('manager@demo.local', 'Quản lý Lan', pw);
+    const agent = await user('agent@demo.local', 'Nhân viên Minh', pw);
+    const viewer = await user('viewer@demo.local', 'Người xem Hùng', pw);
+    await seedDemo(owner, { manager: manager.id, agent: agent.id, viewer: viewer.id });
+  }
 
   // Workspace thật (trống) cho chủ sở hữu — tách biệt hoàn toàn khỏi dữ liệu demo
   const prod = await prisma.workspace.findUnique({ where: { slug: 'main' } });
   if (!prod) {
-    const w = await prisma.workspace.create({ data: { name: 'Doanh nghiệp của tôi', slug: 'main', isDemo: false } });
+    const w = await prisma.workspace.create({ data: { name: process.env.SEED_WORKSPACE_NAME ?? 'Doanh nghiệp của tôi', slug: 'main', isDemo: false } });
     await prisma.membership.create({ data: { workspaceId: w.id, userId: owner.id, role: 'OWNER' } });
     await prisma.aiSettings.create({ data: { workspaceId: w.id } });
   }
-  console.log(`Seed xong. Đăng nhập: owner@demo.local / manager@demo.local / agent@demo.local / viewer@demo.local — mật khẩu: ${process.env.SEED_DEMO_PASSWORD ? '(theo SEED_DEMO_PASSWORD)' : pw}`);
+  console.log(
+    demo
+      ? `Seed xong (có dữ liệu mô phỏng). Đăng nhập: ${owner.email} / manager@demo.local / agent@demo.local / viewer@demo.local — mật khẩu demo: ${process.env.SEED_DEMO_PASSWORD ? '(theo SEED_DEMO_PASSWORD)' : pw}`
+      : `Seed xong. Chủ sở hữu: ${owner.email}. Không tạo dữ liệu mô phỏng.`,
+  );
 }
 
 main()

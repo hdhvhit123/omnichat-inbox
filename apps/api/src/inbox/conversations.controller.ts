@@ -8,6 +8,7 @@ import { normalizeVi } from '../common/text';
 import { parse } from '../common/validation';
 import { PrismaService } from '../common/prisma.service';
 import { OutboxService } from '../outbox/outbox.service';
+import { SendPolicyService } from '../outbox/send-policy.service';
 import { RealtimePublisher } from '../realtime/realtime.publisher';
 import { AuditService } from '../admin/audit.service';
 import { ConversationOpsService } from './conversation-ops.service';
@@ -36,6 +37,7 @@ export class ConversationsController {
     private ops: ConversationOpsService,
     private realtime: RealtimePublisher,
     private audit: AuditService,
+    private policy: SendPolicyService,
   ) {}
 
   @Get()
@@ -108,8 +110,11 @@ export class ConversationsController {
         tags: { include: { tag: true } },
       },
     });
+    const workspace = await this.prisma.workspace.findUniqueOrThrow({ where: { id: ws.workspaceId } });
+    const sendWindow = await this.policy.windowInfo(workspace, c.channel.type, c.lastInboundAt);
     return {
       ...c,
+      sendWindow,
       deliveredWatermark: undefined,
       readWatermark: undefined,
       tags: c.tags.map((t) => t.tag),
