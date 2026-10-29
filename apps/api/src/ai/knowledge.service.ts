@@ -7,7 +7,7 @@ import { QUEUES, QueueService } from '../common/queue.service';
 import { StorageService } from '../files/storage.service';
 
 const STOPWORDS = new Set(
-  'a ah ak anh chi em cho hoi la co khong ko k nhe nha vay the nao gi oi shop ban minh toi duoc voi va cua thi ma nay do roi ah u uh vang da dc j ve o tai cai nhung cac mot hay lam'.split(' '),
+  'a ah ak anh chi em cho hoi la co con khong ko k nhe nha vay the nao gi oi shop ban minh toi duoc voi va cua thi ma nay do roi ah u uh vang da dc j ve o tai cai nhung cac mot hay lam'.split(' '),
 );
 
 export interface RetrievedChunk {
@@ -101,8 +101,15 @@ export class KnowledgeService {
       FROM "KnowledgeChunk" c JOIN "KnowledgeDocument" d ON d.id = c."documentId"
       WHERE c."workspaceId" = ${workspaceId} AND d.approved = true AND d.status = 'READY'
         AND to_tsvector('simple', c.normalized) @@ to_tsquery('simple', ${tsq})
-      ORDER BY rank DESC LIMIT ${limit}`);
-    return rows;
+      ORDER BY rank DESC LIMIT ${limit * 3}`);
+    // Lọc độ trùng khớp: tránh dùng tài liệu chỉ vì trùng một từ phổ biến (ví dụ "hàng")
+    const need = tokens.length === 1 ? 1 : Math.max(2, Math.ceil(tokens.length * 0.4));
+    return rows
+      .map((r) => ({ r, hits: tokens.filter((t) => ` ${normalizeVi(`${r.title} ${r.content}`)} `.includes(` ${t} `)).length }))
+      .filter((x) => x.hits >= need)
+      .sort((a, b) => b.hits - a.hits || b.r.rank - a.r.rank)
+      .slice(0, limit)
+      .map((x) => x.r);
   }
 }
 

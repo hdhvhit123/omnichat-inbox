@@ -12,7 +12,13 @@ import { PrismaService } from '../common/prisma.service';
  * WebSocket: xác thực bằng cookie phiên; chỉ vào phòng của kênh mà người dùng được cấp quyền.
  * Mọi sự kiện gửi từ client (đang xem / đang soạn) đều kiểm tra quyền với hội thoại.
  */
-@WebSocketGateway({ path: '/socket.io', cors: { origin: () => config().CORS_ORIGINS.split(','), credentials: true } })
+@WebSocketGateway({
+  path: '/socket.io',
+  cors: {
+    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => cb(null, !origin || config().CORS_ORIGINS.split(',').map((s) => s.trim()).includes(origin)),
+    credentials: true,
+  },
+})
 export class RealtimeGateway implements OnGatewayConnection {
   private readonly log = new Logger('Realtime');
   @WebSocketServer() server: Server;

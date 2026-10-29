@@ -11,7 +11,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "seed": "ts-node --transpile-only prisma/seed.ts",
-    "test": "jest --runInBand",
+    "test": "jest --runInBand --forceExit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
