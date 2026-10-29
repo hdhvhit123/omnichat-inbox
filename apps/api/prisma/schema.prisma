@@ -1,0 +1,707 @@
+// Mô hình dữ liệu OmniChat Inbox.
+// Quy ước: mọi bảng nghiệp vụ có workspaceId; thời gian lưu UTC (timestamptz).
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Tài khoản, phiên, workspace ----------
+
+enum Role {
+  OWNER
+  MANAGER
+  AGENT
+  VIEWER
+}
+
+model User {
+  id               String       @id @default(cuid())
+  email            String       @unique
+  name             String
+  passwordHash     String
+  failedLoginCount Int          @default(0)
+  lockedUntil      DateTime?    @db.Timestamptz(3)
+  createdAt        DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
+  memberships      Membership[]
+  sessions         Session[]
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime  @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Workspace {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  // Workspace demo tách biệt hoàn toàn khỏi dữ liệu thật; chỉ chứa kênh mô phỏng.
+  isDemo        Boolean  @default(false)
+  timezone      String   @default("Asia/Ho_Chi_Minh")
+  // {"mon":[["08:00","17:30"]], ...} theo giờ địa phương của workspace
+  businessHours Json?
+  retentionDays Int?
+  // Bật nếu đã được Meta duyệt dùng tag HUMAN_AGENT (nhân viên trả lời trong 7 ngày)
+  fbHumanAgentTagEnabled Boolean @default(false)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+
+  memberships   Membership[]
+  channels      Channel[]
+}
+
+model Membership {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  userId        String
+  role          Role
+  // Nhân viên: chỉ thấy hội thoại thuộc các kênh được cấp hoặc được phân công.
+  channelAccess MemberChannelAccess[]
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model MemberChannelAccess {
+  membershipId String
+  channelId    String
+  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  channel      Channel    @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([membershipId, channelId])
+  @@index([channelId])
+}
+
+// ---------- Kênh và thông tin cấp quyền ----------
+
+enum ChannelType {
+  FACEBOOK
+  ZALO
+}
+
+enum ChannelStatus {
+  PENDING       // đã tạo, chưa xác minh bằng API
+  CONNECTED     // đã xác minh bằng API
+  ERROR         // lỗi quyền / token
+  DISCONNECTED  // người dùng ngắt kết nối
+}
+
+enum BotMode {
+  MANUAL
+  ASSIST
+  AUTO
+}
+
+model Channel {
+  id               String        @id @default(cuid())
+  workspaceId      String
+  type             ChannelType
+  // Page ID (Facebook) hoặc OA ID (Zalo)
+  externalId       String
+  name             String
+  avatarUrl        String?
+  status           ChannelStatus @default(PENDING)
+  isSimulated      Boolean       @default(false)
+  botMode          BotMode       @default(MANUAL)
+  lastWebhookAt    DateTime?     @db.Timestamptz(3)
+  lastApiSuccessAt DateTime?     @db.Timestamptz(3)
+  lastVerifiedAt   DateTime?     @db.Timestamptz(3)
+  lastErrorCode    String?
+  lastError        String?
+  lastErrorAt      DateTime?     @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
+
+  workspace        Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  credential       ChannelCredential?
+  memberAccess     MemberChannelAccess[]
+  conversations    Conversation[]
+  identities       CustomerIdentity[]
+
+  // Một Page/OA chỉ thuộc một workspace để định tuyến webhook không mơ hồ.
+  @@unique([type, externalId])
+  @@index([workspaceId])
+}
+
+model ChannelCredential {
+  id                    String    @id @default(cuid())
+  channelId             String    @unique
+  workspaceId           String
+  // AES-256-GCM, không bao giờ trả về frontend hoặc ghi log
+  accessTokenEnc        String
+  refreshTokenEnc       String?
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(3)
+  scopes                String[]  @default([])
+  // Tăng mỗi lần làm mới token; dùng để chống ghi đè đồng thời.
+  version               Int       @default(0)
+  lastRefreshedAt       DateTime? @db.Timestamptz(3)
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+  channel               Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+}
+
+// Trạng thái OAuth tạm thời (state, PKCE verifier) — hết hạn sau vài phút
+model OAuthState {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  userId       String
+  provider     ChannelType
+  stateHash    String   @unique
+  codeVerifier String?
+  // Danh sách Page lấy được sau khi người dùng đăng nhập Facebook (đã mã hoá)
+  payloadEnc   String?
+  expiresAt    DateTime @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([workspaceId])
+}
+
+// ---------- Khách hàng ----------
+
+model Customer {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  displayName  String
+  avatarUrl    String?
+  phone        String?
+  email        String?
+  source       String?
+  notes        String?
+  assigneeId   String?
+  // Khi đã gộp vào hồ sơ khác (có xác nhận), giữ lại để truy vết
+  mergedIntoId String?
+  searchText   String   @default("")
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  identities    CustomerIdentity[]
+  conversations Conversation[]
+  tags          CustomerTag[]
+
+  @@index([workspaceId, updatedAt])
+  @@index([workspaceId, phone])
+}
+
+model CustomerIdentity {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  customerId     String
+  channelId      String
+  // PSID (Facebook, theo từng Page) hoặc user_id theo OA (Zalo)
+  externalUserId String
+  displayName    String?
+  avatarUrl      String?
+  // Zalo: người dùng bỏ quan tâm / chặn; Facebook: không nhận được tin
+  canReceive     Boolean   @default(true)
+  cannotReceiveReason String?
+  lastInboundAt  DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  customer       Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  channel        Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  conversations  Conversation[]
+
+  @@unique([channelId, externalUserId])
+  @@index([customerId])
+}
+
+model CustomerLinkEvent {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  fromCustomerId String
+  toCustomerId   String
+  actorId        String
+  action         String   // MERGE | UNMERGE
+  reason         String
+  evidence       String?
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([workspaceId, createdAt])
+}
+
+// ---------- Hội thoại & tin nhắn ----------
+
+enum ConversationStatus {
+  NEW
+  OPEN
+  PENDING
+  RESOLVED
+}
+
+model Conversation {
+  id                 String             @id @default(cuid())
+  workspaceId        String
+  channelId          String
+  customerId         String
+  identityId         String             @unique
+  status             ConversationStatus @default(NEW)
+  assigneeId         String?
+  // null = theo cấu hình kênh
+  botMode            BotMode?
+  // Đặt khi nhân viên tiếp quản; bot không gửi khi khác null.
+  botPausedAt        DateTime?          @db.Timestamptz(3)
+  botPausedById      String?
+  botPausedReason    String?
+  // Thời điểm tương tác hợp lệ gần nhất của khách (theo dấu thời gian nền tảng)
+  lastInboundAt      DateTime?          @db.Timestamptz(3)
+  lastMessageAt      DateTime?          @db.Timestamptz(3)
+  lastMessagePreview String?
+  unreadCount        Int                @default(0)
+  firstInboundAt     DateTime?          @db.Timestamptz(3)
+  firstHumanReplyAt  DateTime?          @db.Timestamptz(3)
+  resolvedAt         DateTime?          @db.Timestamptz(3)
+  greetedAt          DateTime?          @db.Timestamptz(3)
+  handoffAt          DateTime?          @db.Timestamptz(3)
+  handoffReason      String?
+  // Facebook: watermark delivery/read (ms) để xử lý sự kiện đến sai thứ tự
+  deliveredWatermark BigInt?
+  readWatermark      BigInt?
+  // Quy trình thu thập thông tin (tên → SĐT → nhu cầu)
+  flowState          Json?
+  createdAt          DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(3)
+
+  channel            Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  customer           Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  identity           CustomerIdentity   @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  messages           Message[]
+  notes              InternalNote[]
+  tags               ConversationTag[]
+
+  @@index([workspaceId, status, lastMessageAt(sort: Desc)])
+  @@index([workspaceId, assigneeId, status])
+  @@index([channelId, lastMessageAt(sort: Desc)])
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SenderType {
+  CUSTOMER
+  AGENT
+  BOT
+  SYSTEM
+}
+
+enum MessageStatus {
+  RECEIVED   // tin đến
+  PENDING    // chờ gửi
+  ACCEPTED   // API nền tảng đã chấp nhận
+  DELIVERED  // có bằng chứng đã giao (webhook)
+  READ       // có bằng chứng đã đọc (webhook)
+  FAILED
+  UNKNOWN    // timeout: không biết đã gửi hay chưa — không retry mù
+  BLOCKED    // bị dịch vụ kiểm tra điều kiện chặn; bản nháp được giữ
+  CANCELLED
+}
+
+model Message {
+  id                String           @id @default(cuid())
+  workspaceId       String
+  conversationId    String
+  channelId         String
+  direction         MessageDirection
+  senderType        SenderType
+  authorId          String?
+  text              String?
+  // [{fileId?, url?, type, name, mime, size}]
+  attachments       Json?
+  // mid (Facebook) / msg_id (Zalo)
+  externalId        String?
+  status            MessageStatus
+  errorCode         String?
+  errorMessage      String?
+  // Thời điểm theo nền tảng (dùng để sắp xếp khi webhook đến sai thứ tự)
+  sentAt            DateTime         @db.Timestamptz(3)
+  deliveredAt       DateTime?        @db.Timestamptz(3)
+  readAt            DateTime?        @db.Timestamptz(3)
+  // Khoá idempotent từ client để bấm gửi 2 lần không tạo 2 tin
+  clientMsgId       String?
+  ruleId            String?
+  aiTaskId          String?
+  // Tin echo do công cụ khác gửi từ Page (không qua hệ thống này)
+  sentOutsideSystem Boolean          @default(false)
+  searchText        String           @default("")
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  conversation      Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  outbound          OutboundMessage?
+
+  @@unique([channelId, externalId])
+  @@unique([workspaceId, clientMsgId])
+  @@index([conversationId, sentAt(sort: Desc)])
+  @@index([workspaceId, createdAt])
+}
+
+// Ghi chú nội bộ: bảng riêng, không có đường nào vào outbox → không thể gửi ra kênh.
+model InternalNote {
+  id             String       @id @default(cuid())
+  workspaceId    String
+  conversationId String
+  authorId       String
+  body           String
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model FileObject {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  storageKey   String   @unique
+  filename     String
+  mime         String
+  size         Int
+  sha256       String
+  uploadedById String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([workspaceId, createdAt])
+}
+
+model AssignmentEvent {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  conversationId String
+  fromUserId     String?
+  toUserId       String?
+  actorId        String?
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, createdAt])
+}
+
+model Tag {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  name          String
+  color         String   @default("#64748b")
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  conversations ConversationTag[]
+  customers     CustomerTag[]
+
+  @@unique([workspaceId, name])
+}
+
+model ConversationTag {
+  conversationId String
+  tagId          String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  tag            Tag          @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, tagId])
+  @@index([tagId])
+}
+
+model CustomerTag {
+  customerId String
+  tagId      String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tag        Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([customerId, tagId])
+  @@index([tagId])
+}
+
+model CannedResponse {
+  id          String   @id @default(cuid())
+  workspaceId String
+  shortcut    String
+  title       String
+  body        String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([workspaceId, shortcut])
+}
+
+// ---------- Quy tắc tự động ----------
+
+enum RuleTrigger {
+  NEW_CONVERSATION
+  INBOUND_MESSAGE
+  OUTSIDE_HOURS
+}
+
+model AutomationRule {
+  id                     String       @id @default(cuid())
+  workspaceId            String
+  name                   String
+  enabled                Boolean      @default(false)
+  // Chế độ thử: ghi lịch sử nhưng không gửi
+  testMode               Boolean      @default(true)
+  trigger                RuleTrigger
+  channelTypes           ChannelType[] @default([])
+  channelIds             String[]     @default([])
+  priority               Int          @default(100)
+  // {keywords?: string[], match?: "any"|"all", intents?: string[]}
+  conditions             Json         @default("{}")
+  // [{type: "SEND_TEXT"|"ADD_TAG"|"ASSIGN"|"HANDOFF"|"START_LEAD_CAPTURE"|"SET_STATUS", ...}]
+  actions                Json         @default("[]")
+  isGreeting             Boolean      @default(false)
+  cooldownSeconds        Int          @default(0)
+  maxRunsPerConversation Int?
+  createdAt              DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime     @updatedAt @db.Timestamptz(3)
+
+  @@index([workspaceId, enabled, priority])
+}
+
+enum RuleExecutionStatus {
+  EXECUTED
+  DRY_RUN
+  SKIPPED
+  FAILED
+}
+
+model RuleExecution {
+  id             String              @id @default(cuid())
+  workspaceId    String
+  ruleId         String
+  conversationId String
+  messageId      String
+  status         RuleExecutionStatus
+  detail         String?
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+
+  // Một quy tắc chạy tối đa một lần cho mỗi tin đến (chống trùng khi xử lý lại)
+  @@unique([ruleId, messageId])
+  @@index([ruleId, conversationId, createdAt])
+  @@index([workspaceId, createdAt])
+}
+
+// ---------- AI & kho kiến thức ----------
+
+enum KnowledgeSource {
+  FAQ
+  TEXT
+  PDF
+  DOCX
+}
+
+enum KnowledgeStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+  ARCHIVED
+}
+
+model KnowledgeDocument {
+  id          String          @id @default(cuid())
+  workspaceId String
+  // Các phiên bản của cùng một tài liệu chung groupId
+  groupId     String
+  version     Int             @default(1)
+  title       String
+  sourceType  KnowledgeSource
+  status      KnowledgeStatus @default(PENDING)
+  approved    Boolean         @default(false)
+  error       String?
+  fileId      String?
+  rawText     String?
+  createdById String?
+  createdAt   DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime        @updatedAt @db.Timestamptz(3)
+  chunks      KnowledgeChunk[]
+
+  @@unique([groupId, version])
+  @@index([workspaceId, status])
+}
+
+model KnowledgeChunk {
+  id          String            @id @default(cuid())
+  workspaceId String
+  documentId  String
+  ordinal     Int
+  content     String
+  // chữ thường, bỏ dấu — dùng cho tìm kiếm toàn văn (GIN index tạo trong migration)
+  normalized  String
+  document    KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([workspaceId])
+}
+
+model AiSettings {
+  id                  String   @id @default(cuid())
+  workspaceId         String   @unique
+  // mock | anthropic | openai
+  provider            String   @default("mock")
+  model               String   @default("mock-kb-1")
+  baseUrl             String?
+  apiKeyEnc           String?
+  maxOutputTokens     Int      @default(400)
+  dailyBudgetUsd      Decimal  @default(2) @db.Decimal(10, 4)
+  monthlyBudgetUsd    Decimal  @default(30) @db.Decimal(10, 4)
+  // Giá do quản trị viên nhập theo bảng giá nhà cung cấp (USD / 1 triệu token)
+  inputPricePerMTok   Decimal  @default(0) @db.Decimal(10, 4)
+  outputPricePerMTok  Decimal  @default(0) @db.Decimal(10, 4)
+  // Từ khoá buộc chuyển nhân viên (bổ sung vào danh sách mặc định)
+  handoffKeywords     String[] @default([])
+  updatedAt           DateTime @updatedAt @db.Timestamptz(3)
+}
+
+enum AiTaskStatus {
+  QUEUED
+  RUNNING
+  DRAFTED
+  SENT
+  HANDOFF
+  CANCELLED
+  BLOCKED
+  FAILED
+}
+
+model AiTask {
+  id               String       @id @default(cuid())
+  workspaceId      String
+  conversationId   String
+  triggerMessageId String
+  mode             BotMode
+  status           AiTaskStatus @default(QUEUED)
+  draftText        String?
+  // [{documentId, title, version, chunkId, excerpt}]
+  sources          Json?
+  decision         String?
+  reason           String?
+  inputTokens      Int          @default(0)
+  outputTokens     Int          @default(0)
+  costUsd          Decimal      @default(0) @db.Decimal(10, 6)
+  error            String?
+  createdAt        DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
+
+  @@unique([triggerMessageId])
+  @@index([conversationId, status])
+  @@index([workspaceId, createdAt])
+}
+
+// ---------- Webhook, outbox, chính sách, audit ----------
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+model WebhookEvent {
+  id                String        @id @default(cuid())
+  provider          ChannelType
+  // Page ID / OA ID
+  channelExternalId String
+  // Khoá chống trùng: mid / msg_id / loại+watermark ...
+  eventKey          String
+  eventType         String
+  workspaceId       String?
+  payload           Json
+  status            WebhookStatus @default(RECEIVED)
+  attempts          Int           @default(0)
+  error             String?
+  receivedAt        DateTime      @default(now()) @db.Timestamptz(3)
+  processedAt       DateTime?     @db.Timestamptz(3)
+
+  @@unique([provider, channelExternalId, eventKey])
+  @@index([status, receivedAt])
+  @@index([workspaceId, receivedAt])
+}
+
+enum OutboundStatus {
+  QUEUED
+  SENDING
+  ACCEPTED
+  FAILED
+  UNKNOWN
+  CANCELLED
+  BLOCKED
+}
+
+enum OutboundRequester {
+  AGENT
+  BOT
+  RULE
+  SYSTEM
+}
+
+model OutboundMessage {
+  id            String            @id @default(cuid())
+  workspaceId   String
+  conversationId String
+  channelId     String
+  messageId     String            @unique
+  requestedBy   OutboundRequester
+  status        OutboundStatus    @default(QUEUED)
+  attempts      Int               @default(0)
+  nextAttemptAt DateTime?         @db.Timestamptz(3)
+  // Tham số gửi đã được dịch vụ kiểm tra điều kiện quyết định (messaging_type, tag...)
+  sendParams    Json?
+  lastErrorCode String?
+  lastError     String?
+  createdAt     DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime          @updatedAt @db.Timestamptz(3)
+  message       Message           @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([conversationId, status])
+}
+
+model PolicyRule {
+  id                 String      @id @default(cuid())
+  // null = mặc định hệ thống; có giá trị = ghi đè của workspace
+  workspaceId        String?
+  channelType        ChannelType
+  // FB: RESPONSE | HUMAN_AGENT ; ZALO: CS
+  category           String
+  version            Int
+  windowHours        Int
+  allowedSenders     String[]    // AGENT | BOT | RULE
+  effectiveFrom      DateTime    @db.Timestamptz(3)
+  effectiveTo        DateTime?   @db.Timestamptz(3)
+  sourceUrl          String
+  verifiedAt         DateTime    @db.Timestamptz(3)
+  // VERIFIED (đối chiếu tài liệu chính thức) | SECONDARY (nguồn phụ, cần xác minh)
+  verificationStatus String
+  notes              String?
+  active             Boolean     @default(true)
+  createdById        String?
+  createdAt          DateTime    @default(now()) @db.Timestamptz(3)
+
+  @@index([channelType, category, active])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  workspaceId String?
+  actorId     String?
+  action      String
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  ip          String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([workspaceId, createdAt])
+}
